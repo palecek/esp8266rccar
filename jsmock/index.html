@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+  <title>RC Car WebSocket Controller</title>
+  <script src="/vendor/nipplejs/nipplejs.js"></script>
+</head>
+<body>
+  <style>
+    body {
+      font-size: 16px;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #top {
+      position: relative;
+      height: 5rem;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #bottom {
+      position: relative;
+      display: flex;
+      justify-content: space-between;
+      height: calc(100vh - 5rem);
+    }
+
+    #left {
+      position: relative;
+      width: 200px
+    }
+
+    #right {
+      position: relative;
+      width: 200px
+    }
+
+    #blueLed {
+      border: 0px;
+      height: 4rem;
+      width: 4rem;
+      margin: 0;
+    }
+  </style>
+
+  <div id="top">
+    <input type="checkbox" id="blueLed" name="blueLed" />
+  </div>
+  <div id="bottom">
+    <div id="left"></div>
+    <div id="right"></div>
+  </div>
+
+  <script>
+    const socketProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(`${socketProtocol}//${window.location.host}`);
+    const state = {
+      isBlueLedOn: false,
+      leftMotor: 0,
+      rightMotor: 0
+    };
+
+    const applyStateUpdate = (updates, sendToServer = false) => {
+      if (sendToServer && socket.readyState !== WebSocket.OPEN) {
+        console.warn('Cannot send state update: WebSocket is not connected');
+        document.getElementById('blueLed').checked = state.isBlueLedOn;
+        return;
+      }
+
+      if (updates === null || typeof updates !== 'object' || Array.isArray(updates)) {
+        console.error('WebSocket update requires an object value');
+        return;
+      }
+
+      const changed = {};
+      for (const key of Object.keys(state)) {
+        if (Object.prototype.hasOwnProperty.call(updates, key) &&
+            state[key] !== updates[key]) {
+          state[key] = updates[key];
+          changed[key] = updates[key];
+        }
+      }
+
+      document.getElementById('blueLed').checked = state.isBlueLedOn;
+      if (sendToServer && Object.keys(changed).length > 0) {
+        socket.send(JSON.stringify({ action: 'update', value: changed }));
+      }
+    };
+
+    document.getElementById('blueLed').addEventListener('change', (event) => {
+      applyStateUpdate({ isBlueLedOn: event.target.checked }, true);
+    });
+
+    const createJoystick = (zoneId, eventPrefix, motor) => {
+      const joystick = nipplejs.create({
+        zone: document.getElementById(zoneId),
+        mode: 'static',
+        position: { left: '50%', top: '50%' },
+        size: 200,
+        color: 'black',
+        lockY: true
+      });
+
+      joystick.on(`${eventPrefix}:move`, (event, { direction, distance }) => {
+        const directionY = direction?.y;
+        const motorValue = directionY === 'up'
+          ? Math.round(2.55 * distance)
+          : directionY === 'down'
+            ? Math.round(-2.55 * distance)
+            : 0;
+        applyStateUpdate({ [motor]: motorValue }, true);
+      });
+      joystick.on(`${eventPrefix}:end`, () => {
+        applyStateUpdate({ [motor]: 0 }, true);
+      });
+    };
+
+    createJoystick('left', '0', 'leftMotor');
+    createJoystick('right', '1', 'rightMotor');
+
+    socket.addEventListener('error', (error) => {
+      console.log('WebSocketServer error', error);
+    });
+
+    socket.addEventListener('open', () => {
+      socket.send(JSON.stringify({ action: 'message', value: 'OK' }));
+    });
+
+    socket.addEventListener('message', ({ data }) => {
+      let message;
+      try {
+        message = JSON.parse(data);
+      } catch (error) {
+        console.error('Invalid WebSocket JSON:', error.message);
+        return;
+      }
+
+      if (message === null || typeof message !== 'object' || Array.isArray(message) ||
+          typeof message.action !== 'string') {
+        console.error('WebSocket message is missing a valid action');
+        return;
+      }
+
+      const { action, value } = message;
+      switch (action) {
+        case 'message':
+          if (typeof value !== 'string') {
+            console.error('WebSocket message action requires a string value');
+            return;
+          }
+          console.log('WebSocketServer message', value);
+          break;
+        case 'update':
+          if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+            console.error('WebSocket update requires an object value');
+            return;
+          }
+          applyStateUpdate(value);
+          break;
+        default:
+          console.log('Unknown action', action, 'data', data);
+      }
+    });
+  </script>
+</body>
+</html>
